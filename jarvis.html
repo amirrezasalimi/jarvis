@@ -214,14 +214,16 @@ async function say(txt){const t=await loadTTS();
   if(a instanceof Blob)a=await a.arrayBuffer();
   const b=a instanceof ArrayBuffer?await actx.decodeAudioData(a):(()=>{const x=actx.createBuffer(1,a.length,sr);x.copyToChannel(Float32Array.from(a),0);return x})();await play(b);return}catch(e){console.warn('tts failed',e)}}
  await new Promise(res=>{const u=new SpeechSynthesisUtterance(txt);u.onend=u.onerror=res;speechSynthesis.speak(u)})}
-async function ask(text){hist.push({role:'user',content:text});logAdd('user',text);lab.text='THINKING...';
- const r=await fetch(cfg.endpoint.replace(/\/$/,'')+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+cfg.key},body:JSON.stringify({model:cfg.model,stream:true,messages:[{role:'system',content:cfg.sys},...hist.slice(-12)]})});
- if(!r.ok)throw new Error('LLM '+r.status);
- const rd=r.body.getReader(),dc=new TextDecoder(),q=[];let buf='',sb='',full='',fin=false,sp=null;
- const pump=()=>{if(sp)return;sp=(async()=>{while(q.length||!fin){if(!q.length){await new Promise(z=>setTimeout(z,40));continue}if(aborted)break;mode='speaking';spkT=0;lab.text='< '+full.slice(-58);await speak(q.shift())}})()};
- for(;;){const{value,done}=await rd.read();if(done)break;buf+=dc.decode(value,{stream:true});const ls=buf.split('\n');buf=ls.pop();
-  for(const l of ls){if(!l.startsWith('data:')||l.includes('[DONE]'))continue;let t='';try{t=JSON.parse(l.slice(5)).choices[0].delta.content||''}catch(e){}full+=t;sb+=t;let m;while((m=/^([\s\S]*?[.!?])\s+/.exec(sb))){q.push(m[1]);sb=sb.slice(m[0].length);pump()}}}
- if(sb.trim()){q.push(sb);pump()}fin=true;if(sp)await sp;await drain();hist.push({role:'assistant',content:full});logAdd('ai',full)}
+async function ask(text,id=turnId){const controller=new AbortController();turnController=controller;const signal=controller.signal,user={role:'user',content:text};hist.push(user);logAdd('user',text);lab.text='THINKING...';
+ const q=[];let fin=false,sp=null,full='',sb='',buf='';
+ const check=()=>{signal.throwIfAborted();if(id!==turnId)throw new DOMException('Turn cancelled','AbortError')};
+ const pump=()=>{if(sp)return;sp=(async()=>{while(q.length||!fin){check();if(!q.length){await sleep(40);continue}mode='speaking';spkT=0;lab.text='< '+full.slice(-58);await speak(q.shift(),signal)}})();sp.catch(()=>{})};
+ try{const r=await fetch(cfg.endpoint.replace(/\/$/,'')+'/chat/completions',{signal,method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+cfg.key},body:JSON.stringify({model:cfg.model,stream:true,messages:[{role:'system',content:cfg.sys},...hist.slice(-12)]})});check();
+  if(!r.ok)throw new Error('LLM '+r.status);const rd=r.body.getReader(),dc=new TextDecoder();
+  for(;;){const{value,done}=await rd.read();check();if(done)break;buf+=dc.decode(value,{stream:true});const ls=buf.split('\n');buf=ls.pop();
+   for(const l of ls){if(!l.startsWith('data:')||l.includes('[DONE]'))continue;let t='';try{t=JSON.parse(l.slice(5)).choices[0].delta.content||''}catch(e){}full+=t;sb+=t;let m;while((m=/^([\s\S]*?[.!?])\s+/.exec(sb))){q.push(m[1]);sb=sb.slice(m[0].length);pump()}}}
+  if(sb.trim()){q.push(sb);pump()}fin=true;if(sp)await sp;check();await drain(signal);check();hist.push({role:'assistant',content:full});logAdd('ai',full)
+ }finally{fin=true;controller.abort();if(id!==turnId){const i=hist.indexOf(user);if(i>=0)hist.splice(i,1)}if(turnController===controller)turnController=null}}
 async function turn(a){if(a.length<actx.sampleRate*.4)return;busy=true;aborted=false;mode='thinking';lab.text='TRANSCRIBING...';
  try{const t=(await stt(a)).trim();if(t.length>1&&!/^[\[(].*[\])]$/.test(t)){lab.text='> '+t.slice(0,58);await ask(t)}}
  catch(e){console.error(e);lab.text='ERROR: '+String(e.message||e).slice(0,50);await new Promise(z=>setTimeout(z,2500))}
@@ -244,11 +246,11 @@ async function initP(options){lab.text='LOADING LOCAL TTS...';const M=await imp(
  const root=new URL('./models/phonon-31m-en-local-snapshot-92741c5b07d085ff840e26fea8ce43110b87852f/',location.href),file=name=>new URL(name,root).href;
  const o={lang:'en',model:{weights:{q8:file('model.q8.gguf')},tokenizer:file('tokenizer.json'),config:file('config.json'),voices:{default:file('default-voice.safetensors')},defaultVoice:'default'},onProgress:p=>{lab.text='TTS '+Math.round(100*p.loaded/(p.total||1))+'%'}};if((options.tts||'').startsWith('hf://'))o.model=options.tts;
  if(options.dev==='webgpu'){try{ph=await M.PhononTTS.load({...o,device:'webgpu'})}catch(e){console.warn('phonon webgpu failed, using cpu',e);ph=await M.PhononTTS.load({...o,device:'cpu'})}}else ph=await M.PhononTTS.load({...o,device:'cpu'});return ph}
-async function speak(txt){const t=await loadP();pctl=new AbortController();
+async function speak(txt,signal){signal?.throwIfAborted();const t=await loadP();signal?.throwIfAborted();pctl=new AbortController();
  if(!pAn){pAn=actx.createAnalyser();pAn.fftSize=256;pFd=new Uint8Array(pAn.frequencyBinCount);pAn.connect(actx.destination)}
- const v=await resolveVoice(t,cfg.voice);
- for await(const c of t.stream(txt,{voice:v,signal:pctl.signal})){const b=actx.createBuffer(1,c.length,t.sampleRate);b.getChannelData(0).set(c);const s=actx.createBufferSource();s.buffer=b;s.connect(pAn);pt=Math.max(pt,actx.currentTime+.05);s.start(pt);pt+=b.duration;srcs.push(s)}}
-async function drain(){while(actx&&pt>actx.currentTime+.02&&!aborted)await new Promise(r=>setTimeout(r,50));pAn=null}
+ const v=await resolveVoice(t,cfg.voice);signal?.throwIfAborted();
+ for await(const c of t.stream(txt,{voice:v,signal:pctl.signal})){signal?.throwIfAborted();const b=actx.createBuffer(1,c.length,t.sampleRate);b.getChannelData(0).set(c);const s=actx.createBufferSource();s.buffer=b;s.connect(pAn);pt=Math.max(pt,actx.currentTime+.05);s.start(pt);pt+=b.duration;srcs.push(s)}}
+async function drain(signal){while(actx&&pt>actx.currentTime+.02&&!aborted){signal?.throwIfAborted();await sleep(50)}signal?.throwIfAborted();pAn=null}
 function stopSpeech(){pctl&&pctl.abort();srcs.forEach(s=>{try{s.stop()}catch(e){}});srcs=[];pt=0;pAn=null}
 
 // Voice catalog and isolated settings preview.
@@ -276,7 +278,9 @@ function logAdd(role,text){const t=new PIXI.Text((role==='user'?'YOU':'JARVIS')+
 const mkT=()=>{const t=new PIXI.Text('',{fontFamily:'ui-monospace,Menlo,Consolas,monospace',fontSize:12,fill:0xffffff,letterSpacing:2});app.stage.addChild(t);return t},lt=k=>hTx[k]||(hTx[k]=mkT());
 // mute
 function setMute(v){muted=v;stream&&stream.getAudioTracks().forEach(t=>t.enabled=!v);if(v){stopRec();chunks=[];talking=false;vc=0;if(mode==='listening')lab.text='MIC MUTED (M)'}else if(mode==='listening'){lab.text='LISTENING...';startRec()}}
-addEventListener('keydown',e=>{if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;if(e.key==='m'||e.key==='M')setMute(!muted)});
+let turnId=0,turnController=null;
+function cancelTurn(){turnId++;aborted=true;turnController?.abort();turnController=null;stopSpeech();stopRec();chunks=[];prev=null;talking=false;quiet=0;vc=0;busy=false;if(mode!=='idle'){mode='listening';lab.text=muted?'MIC MUTED (M)':'LISTENING...';startRec()}}
+addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();stopVoiceDemo();cancelTurn();return}if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;if(e.key==='m'||e.key==='M')setMute(!muted)});
 // engine switch (settings or HUD)
 function applyEngine(){stopRec();if(mode==='listening'&&!muted&&!busy){if(cfg.sttMode==='browser')startRec();else loadW().catch(console.error)}}
 function setEngine(){cfg.sttMode=cfg.sttMode==='browser'?'whistle':'browser';try{localStorage.setItem('jarvis-cfg',JSON.stringify(cfg))}catch(e){}applyEngine()}
@@ -297,17 +301,17 @@ function startVAD(src){proc=actx.createScriptProcessor(4096,1,1);const z=actx.cr
  proc.onaudioprocess=e=>{if(!vadOn||busy||muted||cfg.sttMode==='browser')return;const d=e.inputBuffer.getChannelData(0);let s=0;for(let i=0;i<d.length;i++)s+=d[i]*d[i];const rms=Math.sqrt(s/d.length),thr=Math.max(.02,nf*3+.01);
   if(rms>thr){if(!talking&&prev)chunks.push(prev);talking=true;quiet=0;vc++}else if(!talking)nf=nf*.97+rms*.03;else quiet+=d.length/actx.sampleRate;
   if(talking){chunks.push(new Float32Array(d));const now=performance.now();
-   if(now-lastLive>1300&&!liveBusy&&chunks.length>4){lastLive=now;liveBusy=true;stt(cat(chunks)).then(t=>{if(talking&&t)lab.text='> '+t.trim().slice(-58)}).catch(()=>{}).finally(()=>{liveBusy=false})}
+   if(now-lastLive>1300&&!liveBusy&&chunks.length>4){lastLive=now;liveBusy=true;const id=turnId;stt(cat(chunks)).then(t=>{if(id===turnId&&talking&&t)lab.text='> '+t.trim().slice(-58)}).catch(()=>{}).finally(()=>{liveBusy=false})}
    if(quiet>STT_DEBOUNCE_MS/1000){const a=cat(chunks),ok=vc>=3;chunks=[];talking=false;quiet=0;vc=0;if(ok)turn(a);else lab.text='LISTENING...'}}else prev=new Float32Array(d)}}
-async function turn(a){if(a.length<actx.sampleRate*.5)return;busy=true;aborted=false;mode='thinking';lab.text='TRANSCRIBING...';let t='';
- try{t=(await stt(a)).trim()}catch(e){console.error(e);lab.text='ERROR: '+String(e.message||e).slice(0,50);await sleep(2500)}
- if(t&&!junk(t))await userText(t);else{busy=false;if(mode!=='idle'){mode='listening';lab.text='LISTENING...'}}}
-async function userText(t){busy=true;aborted=false;stopRec();mode='thinking';lab.text='> '+t.slice(0,58);
- try{await ask(t)}catch(e){console.error(e);lab.text='ERROR: '+String(e.message||e).slice(0,50);await sleep(2500)}
- busy=false;pAn=null;if(mode!=='idle'){mode='listening';lab.text=muted?'MIC MUTED (M)':'LISTENING...';startRec()}}
+async function turn(a){if(a.length<actx.sampleRate*.5)return;const id=++turnId;busy=true;aborted=false;mode='thinking';lab.text='TRANSCRIBING...';let t='';
+ try{t=(await stt(a)).trim()}catch(e){if(id!==turnId)return;console.error(e);lab.text='ERROR: '+String(e.message||e).slice(0,50);await sleep(2500)}
+ if(id!==turnId)return;if(t&&!junk(t))await userText(t);else{busy=false;if(mode!=='idle'){mode='listening';lab.text=muted?'MIC MUTED (M)':'LISTENING...'}}}
+async function userText(t){const id=++turnId;busy=true;aborted=false;stopRec();mode='thinking';lab.text='> '+t.slice(0,58);
+ try{await ask(t,id)}catch(e){if(id!==turnId||e.name==='AbortError')return;console.error(e);lab.text='ERROR: '+String(e.message||e).slice(0,50);await sleep(2500)}
+ if(id!==turnId)return;busy=false;pAn=null;if(mode!=='idle'){mode='listening';lab.text=muted?'MIC MUTED (M)':'LISTENING...';startRec()}}
 async function tap(){
  if(mode==='idle'){if(await mic()){mode='listening';vadOn=true;muted=false;lab.text='LISTENING...';if(cfg.sttMode==='browser')startRec();else loadW().then(()=>{if(mode==='listening'&&!muted)lab.text='LISTENING...'}).catch(e=>{console.error(e);lab.text='STT FAILED: '+String(e.message).slice(0,40)})}}
- else{vadOn=false;aborted=true;stopSpeech();stopRec();stopMic();mode='idle';busy=false;lab.text='TAP THE CORE TO SPEAK'}}
+ else{mode='idle';cancelTurn();vadOn=false;stopMic();lab.text='TAP THE CORE TO SPEAK'}}
 // Floor transcript: text-local X/Y map to world X/Z, just above the floor.
 function drawLog(){const unit=6/480,gap=.35,visible=[],now=performance.now();let height=0;
  for(let i=LOG.length-1;i>=0;i--){const t=LOG[i];t.visible=false;const h=t.height*unit;if(visible.length>=6||visible.length&&height+h>9)continue;visible.unshift({t,h,age:LOG.length-1-i});height+=h+gap}
