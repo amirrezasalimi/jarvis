@@ -4,6 +4,8 @@ A browser-based voice assistant with a holographic visualization, streaming AI r
 
 **[Launch JARVIS →](https://amirrezasalimi.github.io/jarvis/)**
 
+![JARVIS holographic voice assistant](screenshot.png)
+
 ## Features
 
 - **Voice input:** browser speech recognition by default, with optional local Whistle WebGPU/WASM recognition.
