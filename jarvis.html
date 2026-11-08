@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>J.A.R.V.I.S. Hologram</title>
+<style>
+:root{--bg:#0a0720;--fg:#f3ecff;--card:#1d1740;--line:#4a4590;--acc:#e8541c;--acc2:#1fa3d6}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--card:#1d1740;--fg:#f3ecff;--line:#4a4590}}
+:root[data-theme="dark"]{--card:#1d1740;--fg:#f3ecff;--line:#4a4590}
+*{box-sizing:border-box}html,body{height:100%;margin:0;background:var(--bg);overflow:hidden;font-family:ui-monospace,Menlo,Consolas,monospace}
+canvas#h{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:2;image-rendering:pixelated}
+canvas#v{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:grab}
+#gear{position:fixed;top:calc(14px + env(safe-area-inset-top,0px));right:14px;width:44px;height:44px;border-radius:50%;border:2px solid var(--fg);background:var(--card);color:var(--fg);font-size:22px;cursor:pointer;transition:transform .5s cubic-bezier(.2,.9,.3,1.4),background .2s,box-shadow .2s;z-index:5}
+#gear:hover{transform:rotate(120deg) scale(1.12);background:var(--acc);color:#fff;box-shadow:4px 4px 0 var(--fg)}
+#m{position:fixed;inset:0;display:grid;place-items:center;background:rgba(42,31,85,.45);opacity:0;pointer-events:none;transition:opacity .25s;z-index:9}
+#m.on{opacity:1;pointer-events:auto}
+#card{width:min(440px,92vw);max-height:90vh;overflow:auto;background:var(--card);color:var(--fg);border:2px solid var(--fg);box-shadow:8px 8px 0 var(--acc);padding:18px;transform:translateY(18px) scale(.96);transition:transform .3s cubic-bezier(.2,.9,.3,1.3)}
+#m.on #card{transform:none}
+#card h2{margin:0 0 10px;font-size:15px;letter-spacing:.2em}
+#card h3{margin:14px 0 6px;font-size:11px;letter-spacing:.2em;color:var(--acc)}
+label{display:block;font-size:11px;margin:8px 0 3px;opacity:.8}
+input,select,textarea{width:100%;padding:8px;font:inherit;font-size:13px;background:transparent;color:var(--fg);border:2px solid var(--line);transition:border-color .15s,box-shadow .15s}
+input:hover,select:hover,textarea:hover{border-color:var(--acc2)}
+input:focus,select:focus,textarea:focus{outline:0;border-color:var(--acc);box-shadow:3px 3px 0 var(--acc)}
+.r{display:flex;gap:8px;margin-top:16px;justify-content:flex-end}
+button.b{padding:8px 16px;font:inherit;font-size:12px;letter-spacing:.1em;border:2px solid var(--fg);background:transparent;color:var(--fg);cursor:pointer;transition:transform .12s,background .15s,color .15s}
+button.b:hover{transform:translate(-2px,-2px);box-shadow:3px 3px 0 var(--fg)}
+button.p{background:var(--acc);color:#fff}
+
+</style></head><body>
+<button id="gear" title="Settings" aria-label="Settings">⚙</button>
+
+<div id="m"><div id="card">
+<h2>SETTINGS</h2>
+<h3>LLM · OPENAI-COMPATIBLE</h3>
+<label>Endpoint</label><input id="endpoint" placeholder="https://api.openai.com/v1">
+<label>API key</label><input id="key" type="password" placeholder="sk-...">
+<label>Model</label><input id="model" placeholder="gpt-4o-mini">
+<label>System prompt</label><textarea id="sys" rows="2"></textarea>
+<h3>VOICE · LOCAL</h3>
+<label>TTS model (phonon-tts)</label><input id="tts">
+<label for="voice">TTS voice</label><select id="voice"><option value="">Model default</option></select>
+<div class="r"><button class="b" id="voicesLoad" type="button">LOAD VOICES</button></div>
+<label for="voiceDemo">Demo text</label><input id="voiceDemo" value="Hello. I am Jarvis, ready when you are.">
+<div class="r"><button class="b" id="voiceTest" type="button">TEST VOICE</button><button class="b" id="voiceStop" type="button" disabled>STOP</button></div>
+<p id="voiceStatus" role="status" style="font-size:11px;line-height:1.5">Models and the Phonon voice catalog load from local project files. No Hugging Face download is needed for the bundled model.</p>
+<label>STT engine</label><select id="sttMode"><option value="whistle">Whistle WebGPU (local)</option><option value="browser">Browser (Web Speech API)</option></select>
+<label>STT model (whistle-webgpu)</label><input id="stt">
+<label>Device</label><select id="dev"><option>webgpu</option><option>wasm</option></select>
+<div class="r"><button class="b" id="x">CLOSE</button><button class="b p" id="sv">SAVE</button></div>
+</div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.4.2/pixi.min.js"></script>
+<script>
+// ---------- config ----------
+const DEF={endpoint:'https://api.openai.com/v1',key:'',model:'gpt-4o-mini',sys:'You are JARVIS, a concise, witty AI assistant.',tts:'phonon-tts',voice:'',stt:'whistle-webgpu',sttMode:'whistle',dev:'webgpu'};
+let cfg={...DEF};try{cfg={...DEF,...JSON.parse(localStorage.getItem('jarvis-cfg')||'{}')}}catch(e){}
+const $=id=>document.getElementById(id),F=['endpoint','key','model','sys','tts','voice','stt','sttMode','dev'];
+const openM=()=>{F.forEach(k=>{if(k==='voice')setVoiceOptions(cfg.voice);else $(k).value=cfg[k]});$('m').classList.add('on');refreshVoices()};
+$('gear').onclick=openM;$('x').onclick=()=>{stopVoiceDemo();$('m').classList.remove('on')};
+$('m').onclick=e=>{if(e.target.id==='m'){stopVoiceDemo();$('m').classList.remove('on')}};
+$('sv').onclick=()=>{stopVoiceDemo();F.forEach(k=>cfg[k]=$(k).value);try{localStorage.setItem('jarvis-cfg',JSON.stringify(cfg))}catch(e){}$('m').classList.remove('on')};
+
+// ---------- palettes (hue-shifted: shadows violet, lights warm yellow) ----------
+const hx=h=>{const n=parseInt(h.slice(1),16);return 0xff000000|((n&255)<<16)|(n&0xff00)|((n>>16)&255)};
+const P=['#140e30','#241e5c','#4a5a9e','#d8b86a', '#5a1f8a','#e8541c','#ffb400','#fff1a0', '#1a3d9a','#1fa3d6','#44e0d8','#e4fff4'].map(hx),BG=hx('#0a0720'),HZ=['#1a0e3c','#3a1450','#6a2a50'].map(hx);
+const Bay=[0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5].map(v=>(v+.5)/16);
+
+// ---------- hologram geometry ----------
+const NR=64,NP=44,rA=[];
+for(let i=0;i<NR;i++){const a=[Math.random()-.5,Math.random()-.5,Math.random()-.5],l=Math.hypot(...a);a.forEach((_,k)=>a[k]/=l);
+ let u=[-a[1],a[0],0];const ul=Math.hypot(...u)||1;u=u.map(x=>x/ul);const v=[a[1]*u[2]-a[2]*u[1],a[2]*u[0]-a[0]*u[2],a[0]*u[1]-a[1]*u[0]];
+ rA.push({u,v,R:2.1+Math.random()*.7,sp:(Math.random()-.5)*1.2,ph:Math.random()*6.28,span:1.4+Math.random()*4.8,mat:i%9==0?2:1})}
+const NT=NR*NP+160,pos=new Float32Array(NT*3),pm=new Uint8Array(NT);
+const HY=3.7,SR=6.4,sp_=Math.sin(Math.PI/6),cp_=Math.cos(Math.PI/6);
+
+// ---------- state ----------
+let W,H,S,C=document.createElement('canvas'),g2=C.getContext('2d'),img,u32,px,dep,sh,tex,spr;
+const cam={yaw:.6,zoom:1,px:0,py:0};let mode='idle',E=0,tE=0,tm=0,spkT=0,bars=new Float32Array(96),pulses=[];
+let actx,an,fd,stream;
+const app=new PIXI.Application({background:0x0a0720,antialias:false,resolution:1,autoDensity:false});
+app.view.id='v';document.body.prepend(app.view);const hc={width:0,height:0};
+const lab=new PIXI.Text('TAP THE CORE TO SPEAK',{fontFamily:'ui-monospace,Menlo,Consolas,monospace',fontSize:15,fill:0xffffff,letterSpacing:4,fontWeight:'bold'});lab.anchor.set(.5);
+const ring=new PIXI.Graphics();app.stage.addChild(ring,lab);
+function resize(){const d=devicePixelRatio||1,DW=Math.round(innerWidth*d),DH=Math.round(innerHeight*d);
+ S=Math.max(2,Math.round(DW/(+new URLSearchParams(location.search).get('px')||600)));W=Math.floor(DW/S);H=Math.floor(DH/S);app.renderer.resize(DW,DH);hc.width=DW>>1;hc.height=DH>>1;
+ C.width=W;C.height=H;img=g2.createImageData(W,H);u32=new Uint32Array(img.data.buffer);px=new Uint8Array(W*H);dep=new Float32Array(W*H);sh=new Uint8Array(W*H);
+ if(spr){spr.destroy();tex.destroy(true)}
+ tex=new PIXI.Texture(new PIXI.BaseTexture(C,{scaleMode:PIXI.SCALE_MODES.NEAREST}));spr=new PIXI.Sprite(tex);spr.scale.set(S);app.stage.addChildAt(spr,0);
+ lab.style.fontSize=Math.max(12,Math.round(13*d));lab.x=DW/2;lab.y=DH-40*d}
+addEventListener('resize',resize);resize();
+
+// ---------- audio ----------
+async function mic(){try{stream=await navigator.mediaDevices.getUserMedia({audio:true});actx=actx||new AudioContext({sampleRate:16000});
+ an=actx.createAnalyser();an.fftSize=256;an.smoothingTimeConstant=.7;const src=actx.createMediaStreamSource(stream);src.connect(an);startVAD(src);fd=new Uint8Array(an.frequencyBinCount);return true}catch(e){lab.text='MIC UNAVAILABLE';return false}}
+function stopMic(){proc&&proc.disconnect();stream&&stream.getTracks().forEach(t=>t.stop());stream=an=null}
+async function tap(){
+ if(mode==='idle'){if(await mic()){mode='listening';vadOn=true;lab.text='LISTENING...';loadW().then(()=>{if(mode==='listening')lab.text='LISTENING...'}).catch(e=>{console.error(e);lab.text='STT FAILED: '+String(e.message).slice(0,40)})}}
+ else{vadOn=false;aborted=true;stopSpeech();stopMic();mode='idle';lab.text='TAP THE CORE TO SPEAK'}}
+
+// ---------- input ----------
+const ptr=new Map();let moved=0,pd=0;
+const V=app.view;V.addEventListener('contextmenu',e=>e.preventDefault());
+V.addEventListener('pointerdown',e=>{V.setPointerCapture(e.pointerId);ptr.set(e.pointerId,e);moved=0;V.style.cursor='grabbing';if(ptr.size==2){const[a,b]=[...ptr.values()];pd=Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY)}});
+V.addEventListener('pointermove',e=>{const o=ptr.get(e.pointerId);if(!o)return;
+ if(ptr.size==2){ptr.set(e.pointerId,e);const[a,b]=[...ptr.values()],d=Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY);cam.zoom=Math.min(3,Math.max(.4,cam.zoom*d/pd));pd=d;return}
+ const dx=e.clientX-o.clientX,dy=e.clientY-o.clientY;moved+=Math.abs(dx)+Math.abs(dy);ptr.set(e.pointerId,e);
+ if(e.buttons&2||e.shiftKey){cam.px+=dx;cam.py+=dy}else cam.yaw-=dx*.008});
+const up=e=>{if(ptr.has(e.pointerId)&&ptr.size==1&&moved<6){const r=V.getBoundingClientRect(),k=V.width/r.width,mx=(e.clientX-r.left)*k/S,my=(e.clientY-r.top)*k/S;
+  const c=proj(0,HY,0);{const px_=(e.clientX-r.left)*k,py_=(e.clientY-r.top)*k,b=btns.find(b=>px_>=b.x0&&px_<=b.x1&&py_>=b.y0&&py_<=b.y1);if(b)b.fn();else if(Math.hypot(mx-c[0],my-c[1])<scl()*1.6)tap()}
+ }
+ ptr.delete(e.pointerId);V.style.cursor='grab'};
+V.addEventListener('pointerup',up);V.addEventListener('pointercancel',up);
+V.addEventListener('wheel',e=>{e.preventDefault();cam.zoom=Math.min(3,Math.max(.4,cam.zoom*Math.exp(-e.deltaY*.0012)))},{passive:false});
+V.addEventListener('dblclick',()=>document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen?.());
+
+// ---------- projection ----------
+const scl=()=>cam.zoom*H/15,CX=()=>W/2+cam.px/S,CY=()=>H*.6+cam.py/S;
+function proj(x,y,z){const cY=Math.cos(cam.yaw),sY=Math.sin(cam.yaw),x1=x*cY+z*sY,z1=-x*sY+z*cY,s=scl();
+ return[CX()+s*x1,CY()-s*(y*cp_-z1*sp_),y*sp_+z1*cp_]}
+function plot(x,y,z,s,m,l){const p=proj(x,y,z),X=p[0]|0,Y=p[1]|0;
+ for(let j=0;j<s;j++){const yy=Y+j;if(yy<0||yy>=H)continue;for(let i=0;i<s;i++){const xx=X+i;if(xx<0||xx>=W)continue;const k=yy*W+xx;if(p[2]>dep[k]){dep[k]=p[2];px[k]=m*4+l}}}}
+const lv=(n,b)=>Math.max(0,Math.min(3,((n*.6+2.2)+b-.5)|0));
+
+// ---------- full-res hologram: flowing streaks, gradients, glow ----------
+const COL=['rgba(232,84,28,.45)','rgba(255,120,20,.72)','rgba(255,184,0,.92)','rgba(255,244,170,1)'];
+function drawHolo(){const d=hg;d.clearRect(0,0,hc.width,hc.height);d.lineCap='round';
+ const s=scl(),cen=proj(0,HY,0),cx=cen[0]*S,cy=cen[1]*S,u=s*S,cd=cen[2],w=Math.max(1,S*.8);
+ let g=d.createRadialGradient(cx,cy,u*1.1,cx,cy,u*3.2);g.addColorStop(0,'rgba(255,170,40,0)');g.addColorStop(.72,'rgba(255,150,30,'+(.15+E*.12)+')');g.addColorStop(1,'rgba(255,120,20,0)');
+ d.fillStyle=g;d.beginPath();d.arc(cx,cy,u*3.2,0,6.283);d.fill();
+ const M=()=>new Path2D(),under=M(),glow=M(),Bk=[[M(),M()],[M(),M()],[M(),M()],[M(),M()]],dots=M();
+ for(let i=0;i<NR;i++){const dir=rA[i].sp<0?-1:1;let px0=0,py0=0;
+  for(let j=0;j<NP;j++){const k=i*NP+j,p=proj(pos[k*3],pos[k*3+1],pos[k*3+2]),X=p[0]*S,Y=p[1]*S;
+   if(j){const f=.5+.5*Math.sin(j*.45-tm*3.2*dir+i*1.7),b=Math.min(3,(f*f*3.99)|0),fr=p[2]>cd?1:0;
+    under.moveTo(px0,py0);under.lineTo(X,Y);glow.moveTo(px0,py0);glow.lineTo(X,Y);Bk[b][fr].moveTo(px0,py0);Bk[b][fr].lineTo(X,Y);
+    if(b===3&&fr){dots.moveTo(X+u*.035,Y);dots.arc(X,Y,u*.035*(1+E),0,6.283)}}
+   px0=X;py0=Y}}
+ for(let k=0;k<28;k++){const a=k*2.4+tm*.25,bb=Math.acos(1-2*(k+.5)/28),t=(tm*.45+k*.37)%1,r0=.5+t*2.4,r1=r0+.4,dx=Math.sin(bb)*Math.cos(a),dy=Math.cos(bb),dz=Math.sin(bb)*Math.sin(a),p0=proj(dx*r0,HY+dy*r0,dz*r0),p1=proj(dx*r1,HY+dy*r1,dz*r1),q=Bk[2+(t>.5?1:0)][p0[2]>cd?1:0];q.moveTo(p0[0]*S,p0[1]*S);q.lineTo(p1[0]*S,p1[1]*S)}
+ d.strokeStyle='rgba(70,20,120,.15)';d.lineWidth=w*3.2;d.stroke(under);
+ d.strokeStyle='rgba(255,130,20,.10)';d.lineWidth=w*7;d.stroke(glow);
+ const pass=fr=>{for(let b=0;b<4;b++){d.strokeStyle=COL[b];d.lineWidth=w*(1+b*.45);d.stroke(Bk[b][fr])}};
+ d.globalAlpha=.45;pass(0);d.globalAlpha=1;
+ const cr=u*(.95+E*.8);g=d.createRadialGradient(cx,cy,0,cx,cy,cr);g.addColorStop(0,'rgba(255,255,255,1)');g.addColorStop(.25,'rgba(255,244,170,.95)');g.addColorStop(.55,'rgba(255,170,20,.6)');g.addColorStop(1,'rgba(255,100,20,0)');
+ d.fillStyle=g;d.beginPath();d.arc(cx,cy,cr,0,6.283);d.fill();
+ pass(1);d.fillStyle='#ffb400';d.fill(dots);
+ d.strokeStyle='rgba(255,160,30,.55)';d.lineWidth=w*1.5;d.beginPath();d.ellipse(cx,cy,u*2.85,u*2.85,0,0,6.283);d.stroke()}
+
+// ---------- raster hologram: ragged dashes, circuits, flows, crescent ----------
+let gl,gb;const ND=520,dpp=new Float32Array(ND*3),dtn=new Float32Array(ND*3),dbr=new Float32Array(ND),dgr=new Uint8Array(ND);
+for(let i=0;i<ND;i++){const a=Math.random()*6.283,c=2*Math.random()-1,s=Math.sqrt(1-c*c),r=Math.random()<.7?2.2+Math.random()*.9:Math.random()*2.2,nx=s*Math.cos(a),ny=c,nz=s*Math.sin(a);
+ let tx=Math.random()-.5,ty=Math.random()-.5,tz=Math.random()-.5;const d=tx*nx+ty*ny+tz*nz;tx-=d*nx;ty-=d*ny;tz-=d*nz;const l=Math.hypot(tx,ty,tz)||1,len=Math.min(1,.2-Math.log(Math.random()+.01)*.2);
+ dpp.set([nx*r,ny*r,nz*r],i*3);dtn.set([tx/l*len,ty/l*len,tz/l*len],i*3);dbr[i]=1.3+Math.random()*2.6;dgr[i]=i%3}
+const NC=36,cp0=new Float32Array(NC*3),cd0=new Float32Array(NC*3);
+for(let i=0;i<NC;i++){const a=Math.random()*6.283,c=2*Math.random()-1,s=Math.sqrt(1-c*c),r=1+Math.random()*1.8;cp0.set([s*Math.cos(a)*r,c*r,s*Math.sin(a)*r],i*3);cd0[i*3+i%3]=(.2+Math.random()*.7)*(Math.random()<.5?-1:1)}
+const SG=[.09,-.13,.18],TG=[0,.5,-.7];
+function rot(g,x,y,z,o){const an=tm*SG[g],c=Math.cos(an),s=Math.sin(an),ct=Math.cos(TG[g]),st=Math.sin(TG[g]),a=x*c+z*s,b=-x*s+z*c;o[0]=a*ct-y*st;o[1]=a*st+y*ct;o[2]=b}
+function seg(ax,ay,az,bx,by,bz,m,br){const a=proj(ax,ay,az),b=proj(bx,by,bz);let x0=a[0]|0,y0=a[1]|0;const x1=b[0]|0,y1=b[1]|0,dx=Math.abs(x1-x0),dy=-Math.abs(y1-y0),sx=x0<x1?1:-1,sy=y0<y1?1:-1,n=Math.max(dx,-dy)||1;let e=dx+dy,i=0;
+ for(;;){const t=i/n;if(x0>=0&&x0<W&&y0>=0&&y0<H){const k=y0*W+x0,nn=a[2]+(b[2]-a[2])*t;if(nn>dep[k]){dep[k]=nn;px[k]=m*4+Math.max(0,Math.min(3,((br-(1-t)*1.5)+Bay[(y0&3)*4+(x0&3)]-.5)|0))}}
+  if(x0===x1&&y0===y1||++i>300)break;const e2=2*e;if(e2>=dy){e+=dy;x0+=sx}if(e2<=dx){e+=dx;y0+=sy}}}
+function holoRaster(){const o=[0,0,0],o2=[0,0,0],fl=(tm*5)|0;
+ for(let i=0;i<ND;i++){const k=i*3,g=dgr[i],h=((i*2654435761+fl*40503)>>>0)%100;if(h<3)continue;const st=1+E*.9;
+  rot(g,dpp[k],dpp[k+1],dpp[k+2],o);rot(g,dpp[k]+dtn[k]*st,dpp[k+1]+dtn[k+1]*st,dpp[k+2]+dtn[k+2]*st,o2);seg(o[0],o[1]+HY,o[2],o2[0],o2[1]+HY,o2[2],1,dbr[i]*(h>85?1.3:1))}
+ for(let i=0;i<NC;i++){const k=i*3;rot(1,cp0[k],cp0[k+1],cp0[k+2],o);rot(1,cp0[k]+cd0[k],cp0[k+1]+cd0[k+1],cp0[k+2]+cd0[k+2],o2);seg(o[0],o[1]+HY,o[2],o2[0],o2[1]+HY,o2[2],1,1.6+(i%3)*.5)}
+ for(let i=0;i<NR;i+=3){const dir=rA[i].sp<0?-1:1;for(let j=1;j<NP;j++){const k=(i*NP+j)*3,q=k-3,f=.5+.5*Math.sin(j*.28-tm*2*dir+i),br=1.3+f*f*2.6;for(let w=0;w<2;w++)seg(pos[q],pos[q+1]+w*.08,pos[q+2],pos[k],pos[k+1]+w*.08,pos[k+2],1,br)}}
+ for(const R of[1.45,1.62]){let pv=null;for(let t=0;t<64;t++){const th=.5+t*.065+tm*.15;rot(1,R*Math.cos(th),R*Math.sin(th)*.6,R*Math.sin(th)*.5,o);if(pv)seg(pv[0],pv[1]+HY,pv[2],o[0],o[1]+HY,o[2],1,3.7-Math.abs(t-32)*.03);pv=[o[0],o[1],o[2]]}}
+ for(let n=NR*NP;n<NT;n++)plot(pos[n*3],pos[n*3+1],pos[n*3+2],2,1,3)}
+
+// ---------- additive hologram: dense gradient streaks, flowing rings, crescent, glow (half-res, nearest upscaled) ----------
+function drawHolo2(){const d=hg,k=S/2,u=scl()*k,cen=proj(0,HY,0),cx=cen[0]*k,cy=cen[1]*k,cd=cen[2],w=Math.max(1,k*.9);
+ d.globalCompositeOperation='source-over';d.globalAlpha=1;d.clearRect(0,0,hc.width,hc.height);d.globalCompositeOperation='lighter';d.lineCap='round';
+ const M=()=>new Path2D(),T=[M(),M()],Hd=[M(),M()],Ho=[M(),M()],Rg=[[M(),M()],[M(),M()],[M(),M()]],Gl=M(),Sp=M(),Cr=M(),Cc=M(),o=[0,0,0],o2=[0,0,0],st=1+E*.9,fl=(tm*5)|0;
+ for(let i=0;i<ND;i++){const j=i*3,g=dgr[i],h=((i*2654435761+fl*40503)>>>0)%100;if(h<6)continue;
+  rot(g,dpp[j],dpp[j+1],dpp[j+2],o);rot(g,dpp[j]+dtn[j]*st,dpp[j+1]+dtn[j+1]*st,dpp[j+2]+dtn[j+2]*st,o2);
+  const a=proj(o[0],o[1]+HY,o[2]),b=proj(o2[0],o2[1]+HY,o2[2]),f=a[2]>cd?1:0,ax=a[0]*k,ay=a[1]*k,bx=b[0]*k,by=b[1]*k,mx=(ax+bx)/2,my=(ay+by)/2;
+  T[f].moveTo(ax,ay);T[f].lineTo(mx,my);const P=dbr[i]>2.6||h>92?Ho:Hd;P[f].moveTo(mx,my);P[f].lineTo(bx,by);Gl.moveTo(ax,ay);Gl.lineTo(bx,by);
+  if(h>94){Sp.moveTo(bx+w,by);Sp.arc(bx,by,w*1.2,0,6.283)}}
+ for(let i=0;i<NR;i+=2){const dir=rA[i].sp<0?-1:1;let x0=0,y0=0;for(let j=0;j<NP;j++){const q=(i*NP+j)*3,p=proj(pos[q],pos[q+1],pos[q+2]),X=p[0]*k,Y=p[1]*k;
+  if(j){const f=.5+.5*Math.sin(j*.28-tm*2*dir+i),b=f<.4?0:f<.75?1:2,pa=Rg[b][p[2]>cd?1:0];pa.moveTo(x0,y0);pa.lineTo(X,Y)}x0=X;y0=Y}}
+ for(let i=0;i<NC;i++){const j=i*3;rot(1,cp0[j],cp0[j+1],cp0[j+2],o);rot(1,cp0[j]+cd0[j],cp0[j+1]+cd0[j+1],cp0[j+2]+cd0[j+2],o2);const a=proj(o[0],o[1]+HY,o[2]),b=proj(o2[0],o2[1]+HY,o2[2]);Cc.moveTo(a[0]*k,a[1]*k);Cc.lineTo(b[0]*k,b[1]*k)}
+ for(const R of[1.45,1.62])for(let t=0;t<64;t++){const th=.5+t*.065+tm*.15;rot(1,R*Math.cos(th),R*Math.sin(th)*.6,R*Math.sin(th)*.5,o);const p=proj(o[0],o[1]+HY,o[2]);t?Cr.lineTo(p[0]*k,p[1]*k):Cr.moveTo(p[0]*k,p[1]*k)}
+ let g=d.createRadialGradient(cx,cy,u*1.2,cx,cy,u*3.3);g.addColorStop(0,'rgba(255,140,30,0)');g.addColorStop(.7,'rgba(255,130,25,'+(.1+E*.08)+')');g.addColorStop(1,'rgba(255,100,20,0)');d.fillStyle=g;d.beginPath();d.arc(cx,cy,u*3.3,0,6.283);d.fill();
+ const sk=(p,c,l,a)=>{d.strokeStyle=c;d.lineWidth=l;d.globalAlpha=a;d.stroke(p)};
+ const pass=(f,m)=>{sk(T[f],'rgb(200,80,10)',w,.55*m);sk(Rg[0][f],'rgb(170,65,10)',w,.5*m);sk(Hd[f],'rgb(255,160,30)',w*1.2,.9*m);sk(Rg[1][f],'rgb(255,150,25)',w*1.5,.8*m);sk(Ho[f],'rgb(255,235,170)',w*1.5,m);sk(Rg[2][f],'rgb(255,230,150)',w*2,m)};
+ sk(Gl,'rgb(110,40,5)',w*5,.1);pass(0,.45);
+ const cr=u*(.9+E*.8);g=d.createRadialGradient(cx,cy,0,cx,cy,cr);g.addColorStop(0,'rgba(255,245,200,.95)');g.addColorStop(.3,'rgba(255,170,30,.55)');g.addColorStop(1,'rgba(255,90,10,0)');d.globalAlpha=1;d.fillStyle=g;d.beginPath();d.arc(cx,cy,cr,0,6.283);d.fill();
+ pass(1,1);sk(Cc,'rgb(255,170,40)',w,.35);sk(Cr,'rgb(255,120,10)',w*7,.18);sk(Cr,'rgb(255,190,50)',w*3.5,.45);sk(Cr,'rgb(255,248,210)',w*1.6,1);
+ d.globalAlpha=1;d.fillStyle='rgb(255,245,200)';d.fill(Sp)}
+
+// ---------- in-scene HUD (Pixi, anchored to 3D points) ----------
+const hl=[[.2,2.6],[2.2,-1.2],[3.6,2.2],[5.1,-.4],[1.2,-2.2]].map(([a,y])=>{const t=new PIXI.Text('',{fontFamily:'ui-monospace,Menlo,Consolas,monospace',fontSize:12,fill:0xffd36a,letterSpacing:2});app.stage.addChild(t);return{a,y,t}});
+const hgx=new PIXI.Graphics();app.stage.addChild(hgx);
+function hud(){const d=devicePixelRatio||1,cd=proj(0,HY,0)[2],tx=['STATUS '+mode.toUpperCase(),'ENERGY '+'#'.repeat(Math.round(E*10)).padEnd(10,'.'),'STT '+cfg.stt+' '+cfg.dev,'TTS '+cfg.tts,'LLM '+cfg.model];hgx.clear();
+ hl.forEach((h,i)=>{const a=h.a+tm*.06,p=proj(Math.cos(a)*5.4,HY+h.y,Math.sin(a)*5.4),q=proj(Math.cos(a)*3.1,HY+h.y*.5,Math.sin(a)*3.1),fr=p[2]>cd?1:.3,X=Math.round(p[0]*S),Y=Math.round(p[1]*S),R=p[0]>q[0];
+  hgx.lineStyle(Math.max(1,S>>1),0xffb400,.55*fr).moveTo(Math.round(q[0]*S),Math.round(q[1]*S)).lineTo(X,Y);hgx.lineStyle(0).beginFill(0xffd36a,fr).drawRect(X-S,Y-S,S*2,S*2).endFill();
+  const t=h.t;t.text=tx[i];t.style.fontSize=Math.round(11*d);t.anchor.set(R?0:1,.5);t.x=X+(R?10:-10)*d;t.y=Y;t.alpha=fr})}
+
+// ---------- Part 2: VAD -> STT (transformers.js, WebGPU) -> LLM (stream) -> TTS (phonon-tts) ----------
+// NOTE: model downloads + LLM calls need network access; a claude.ai-hosted page blocks them, so run this file from your own host/localhost.
+let asr,tts,pAn,pFd,pSrc,proc,busy=false,vadOn=false,aborted=false,chunks=[],prev=null,quiet=0,talking=false;const hist=[];
+const cat=a=>{const o=new Float32Array(a.reduce((n,x)=>n+x.length,0));let k=0;for(const x of a){o.set(x,k);k+=x.length}return o};
+function startVAD(src){proc=actx.createScriptProcessor(4096,1,1);const z=actx.createGain();z.gain.value=0;src.connect(proc);proc.connect(z);z.connect(actx.destination);
+ proc.onaudioprocess=e=>{if(!vadOn||busy)return;const d=e.inputBuffer.getChannelData(0);let s=0;for(let i=0;i<d.length;i++)s+=d[i]*d[i];const rms=Math.sqrt(s/d.length);
+  if(rms>.02){if(!talking&&prev)chunks.push(prev);talking=true;quiet=0}else if(talking)quiet+=d.length/actx.sampleRate;
+  if(talking){chunks.push(new Float32Array(d));if(quiet>1.1){const a=cat(chunks);chunks=[];talking=false;quiet=0;turn(a)}}else prev=new Float32Array(d)}}
+const imp=u=>import(u);
+async function loadSTT(){if(asr)return asr;lab.text='LOADING STT MODEL...';const T=await imp('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1/+esm');
+ asr=await T.pipeline('automatic-speech-recognition',cfg.stt.includes('/')?cfg.stt:'onnx-community/whisper-base',{device:cfg.dev,dtype:cfg.dev==='webgpu'?{encoder_model:'fp32',decoder_model_merged:'q4'}:'q8'});return asr}
+// ADAPTER: phonon-tts API is probed defensively; falls back to browser speechSynthesis if it cannot load
+async function loadTTS(){if(tts!==undefined)return tts;lab.text='LOADING TTS...';
+ try{const M=await imp('https://cdn.jsdelivr.net/npm/phonon-tts/+esm'),C=M.PhononTTS||M.Phonon||M.TTS||M.default||M,o={device:cfg.dev,voice:cfg.voice};if(cfg.tts&&cfg.tts!=='phonon-tts')o.model=cfg.tts;
+  const f=C.load||C.create||C.from_pretrained;tts=f?await f.call(C,o):typeof C==='function'?new C(o):C;if(tts.init)await tts.init(o)}
+ catch(e){console.warn('phonon-tts unavailable, using speechSynthesis',e);tts=null}return tts}
+function play(buf){return new Promise(res=>{const s=actx.createBufferSource();s.buffer=buf;pAn=actx.createAnalyser();pAn.fftSize=256;pFd=new Uint8Array(pAn.frequencyBinCount);s.connect(pAn);pAn.connect(actx.destination);s.onended=()=>{pAn=null;res()};pSrc=s;s.start()})}
+async function say(txt){const t=await loadTTS();
+ if(t){try{const fn=t.generate||t.synthesize||t.speak||t.tts;let r=await fn.call(t,txt,{voice:cfg.voice});let a=r&&(r.audio??r.samples??r.data)||r;const sr=(r&&(r.sampling_rate??r.sampleRate??r.sample_rate))||24000;
+  if(a instanceof Blob)a=await a.arrayBuffer();
+  const b=a instanceof ArrayBuffer?await actx.decodeAudioData(a):(()=>{const x=actx.createBuffer(1,a.length,sr);x.copyToChannel(Float32Array.from(a),0);return x})();await play(b);return}catch(e){console.warn('tts failed',e)}}
+ await new Promise(res=>{const u=new SpeechSynthesisUtterance(txt);u.onend=u.onerror=res;speechSynthesis.speak(u)})}
+async function ask(text){hist.push({role:'user',content:text});logAdd('user',text);lab.text='THINKING...';
+ const r=await fetch(cfg.endpoint.replace(/\/$/,'')+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+cfg.key},body:JSON.stringify({model:cfg.model,stream:true,messages:[{role:'system',content:cfg.sys},...hist.slice(-12)]})});
+ if(!r.ok)throw new Error('LLM '+r.status);
+ const rd=r.body.getReader(),dc=new TextDecoder(),q=[];let buf='',sb='',full='',fin=false,sp=null;
+ const pump=()=>{if(sp)return;sp=(async()=>{while(q.length||!fin){if(!q.length){await new Promise(z=>setTimeout(z,40));continue}if(aborted)break;mode='speaking';spkT=0;lab.text='< '+full.slice(-58);await speak(q.shift())}})()};
+ for(;;){const{value,done}=await rd.read();if(done)break;buf+=dc.decode(value,{stream:true});const ls=buf.split('\n');buf=ls.pop();
+  for(const l of ls){if(!l.startsWith('data:')||l.includes('[DONE]'))continue;let t='';try{t=JSON.parse(l.slice(5)).choices[0].delta.content||''}catch(e){}full+=t;sb+=t;let m;while((m=/^([\s\S]*?[.!?])\s+/.exec(sb))){q.push(m[1]);sb=sb.slice(m[0].length);pump()}}}
+ if(sb.trim()){q.push(sb);pump()}fin=true;if(sp)await sp;await drain();hist.push({role:'assistant',content:full});logAdd('ai',full)}
+async function turn(a){if(a.length<actx.sampleRate*.4)return;busy=true;aborted=false;mode='thinking';lab.text='TRANSCRIBING...';
+ try{const t=(await stt(a)).trim();if(t.length>1&&!/^[\[(].*[\])]$/.test(t)){lab.text='> '+t.slice(0,58);await ask(t)}}
+ catch(e){console.error(e);lab.text='ERROR: '+String(e.message||e).slice(0,50);await new Promise(z=>setTimeout(z,2500))}
+ busy=false;pAn=null;if(mode!=='idle'){mode='listening';lab.text='LISTENING...'}}
+
+// ---------- Part 2b: exact backends ----------
+// STT = the whistle-webgpu Space itself: copy its files into ./whistle/  (hf download hf://spaces/mrfakename/whistle-webgpu --local-dir whistle)
+// Verified from its index.html: worker is a module worker; messages init{cfg} -> progress/status/ready/result. UNVERIFIED: the request message below.
+let ww,wReady,wRes,wseq=0;
+function loadW(){if(wReady)return wReady;wReady=new Promise((ok,bad)=>{try{ww=new Worker('whistle/worker.js',{type:'module'})}catch(e){return bad(e)}
+ ww.onerror=()=>bad(new Error('whistle worker failed: put Space files in ./whistle/'));
+ ww.onmessage=({data:d})=>{if(d.type==='progress')lab.text='STT '+Math.round(100*d.loaded/d.total)+'%';else if(d.type==='status')lab.text='STT: '+d.text;else if(d.type==='ready')ok(d);
+  else if(d.type==='result'&&!d.partial&&wRes){const r=d.result||d.r||d;wRes(r.text||'');wRes=null}};
+ ww.postMessage({type:'init',cfg:{}})});return wReady}
+async function stt(pcm){await loadW();const a=pcm.length>480000?pcm.slice(-480000):pcm;return new Promise(res=>{wRes=res;ww.postMessage({type:'transcribe',pcm:a,seq:++wseq})})}
+// TTS = phonon-tts exactly as documented: PhononTTS.load({lang,device}) + tts.stream(text,{voice,signal}) -> Float32Array chunks @ tts.sampleRate
+let ph,pctl,pt=0,srcs=[],phLoading=null,phKey='';
+async function loadP(options=cfg){const key=JSON.stringify([options.tts,options.dev]);if(phLoading){await phLoading;return loadP(options)}if(ph&&phKey===key)return ph;if(ph){ph.dispose();ph=null}phKey=key;phLoading=initP(options);try{return await phLoading}finally{phLoading=null}}
+async function initP(options){lab.text='LOADING LOCAL TTS...';const M=await imp('./vendor/phonon-tts/index.js');
+ const root=new URL('./models/phonon-31m-en-local-snapshot-92741c5b07d085ff840e26fea8ce43110b87852f/',location.href),file=name=>new URL(name,root).href;
+ const o={lang:'en',model:{weights:{q8:file('model.q8.gguf')},tokenizer:file('tokenizer.json'),config:file('config.json'),voices:{default:file('default-voice.safetensors')},defaultVoice:'default'},onProgress:p=>{lab.text='TTS '+Math.round(100*p.loaded/(p.total||1))+'%'}};if((options.tts||'').startsWith('hf://'))o.model=options.tts;
+ if(options.dev==='webgpu'){try{ph=await M.PhononTTS.load({...o,device:'webgpu'})}catch(e){console.warn('phonon webgpu failed, using cpu',e);ph=await M.PhononTTS.load({...o,device:'cpu'})}}else ph=await M.PhononTTS.load({...o,device:'cpu'});return ph}
+async function speak(txt){const t=await loadP();pctl=new AbortController();
+ if(!pAn){pAn=actx.createAnalyser();pAn.fftSize=256;pFd=new Uint8Array(pAn.frequencyBinCount);pAn.connect(actx.destination)}
+ const v=await resolveVoice(t,cfg.voice);
+ for await(const c of t.stream(txt,{voice:v,signal:pctl.signal})){const b=actx.createBuffer(1,c.length,t.sampleRate);b.getChannelData(0).set(c);const s=actx.createBufferSource();s.buffer=b;s.connect(pAn);pt=Math.max(pt,actx.currentTime+.05);s.start(pt);pt+=b.duration;srcs.push(s)}}
+async function drain(){while(actx&&pt>actx.currentTime+.02&&!aborted)await new Promise(r=>setTimeout(r,50));pAn=null}
+function stopSpeech(){pctl&&pctl.abort();srcs.forEach(s=>{try{s.stop()}catch(e){}});srcs=[];pt=0;pAn=null}
+
+// Voice catalog and isolated settings preview.
+const VOICE_CATALOG=new URL('./models/phonon-voices-local/',location.href).href;
+let voiceCatalog=[],catalogLoading=null,demoAudio=null,demoUrl=null,demoController=null;
+function setVoiceOptions(selected=$('voice').value){const select=$('voice');select.replaceChildren(new Option('Model default',''));for(const name of ph?.voices||[])select.add(new Option(name,name));for(const v of voiceCatalog){const id='catalog:'+v.voice_id;if(!Array.from(select.options).some(o=>o.value===id))select.add(new Option(v.name+' · '+v.locale+' · '+v.gender,id))}if(selected&&!Array.from(select.options).some(o=>o.value===selected))select.add(new Option(selected+' (saved)',selected));select.value=selected}
+async function refreshVoices(){const button=$('voicesLoad');button.disabled=true;$('voiceStatus').textContent='Loading local voice catalog...';try{if(!voiceCatalog.length){if(!catalogLoading)catalogLoading=(async()=>{const r=await fetch(VOICE_CATALOG+'voices.jsonl');if(!r.ok)throw new Error('Voice catalog HTTP '+r.status);return (await r.text()).split('\n').filter(s=>s.trim()).map(s=>JSON.parse(s)).filter(v=>v.language==='en').sort((a,b)=>a.name.localeCompare(b.name))})();try{voiceCatalog=await catalogLoading}finally{catalogLoading=null}}setVoiceOptions();$('voiceStatus').textContent=voiceCatalog.length+' English catalog voices available. Test uses the model and device currently shown; Save applies your selection.'}catch(e){$('voiceStatus').textContent='Could not load voices: '+e.message+' — retry Load Voices.'}finally{button.disabled=false}}
+async function resolveVoice(tts,name){if(!name)return undefined;if(name.startsWith('catalog:')){if(!voiceCatalog.length)await refreshVoices();const v=voiceCatalog.find(v=>'catalog:'+v.voice_id===name);if(!v)throw new Error('Selected voice is unavailable. Reload the voice catalog.');if(!tts.voices.includes(name))await tts.addVoice(name,VOICE_CATALOG+v.filename);return name}if(!tts.voices.includes(name))throw new Error('Voice "'+name+'" is not in this model. Choose a voice in Settings.');return name}
+function stopVoiceDemo(){demoController?.abort();demoController=null;if(demoAudio){demoAudio.pause();demoAudio=null}if(demoUrl){URL.revokeObjectURL(demoUrl);demoUrl=null}$('voiceStop').disabled=true;$('voiceTest').disabled=false}
+async function testVoice(){if(busy||mode!=='idle'){$('voiceStatus').textContent='Stop conversation listening before testing a voice.';return}stopVoiceDemo();const controller=new AbortController();demoController=controller;$('voiceTest').disabled=true;$('voiceStop').disabled=false;const text=$('voiceDemo').value.trim();try{if(!text)throw new Error('Enter a short demo text.');$('voiceStatus').textContent='Loading TTS model and voice...';const t=await loadP({tts:$('tts').value,dev:$('dev').value});if(controller.signal.aborted)return;setVoiceOptions();const voice=await resolveVoice(t,$('voice').value);if(controller.signal.aborted)return;$('voiceStatus').textContent='Generating demo...';const wav=await t.synthWav(text.slice(0,300),{voice,signal:controller.signal});if(controller.signal.aborted)return;demoUrl=URL.createObjectURL(wav);demoAudio=new Audio(demoUrl);demoAudio.onended=()=>{stopVoiceDemo();$('voiceStatus').textContent='Demo finished.'};await demoAudio.play();$('voiceStatus').textContent='Playing selected voice...'}catch(e){if(!controller.signal.aborted){stopVoiceDemo();$('voiceStatus').textContent='Voice preview failed: '+e.message}}finally{if(demoController===controller&&!demoAudio)stopVoiceDemo()}}
+$('voicesLoad').onclick=refreshVoices;$('voiceTest').onclick=testVoice;$('voiceStop').onclick=()=>{stopVoiceDemo();$('voiceStatus').textContent='Demo stopped.'};
+
+// ---------- v3: mute, noise gate, live text, STT engine switch, 3D history, cyan AI theme ----------
+// (later function declarations override the earlier ones: tap, turn, startVAD, stt, hud)
+let muted=false,theme=0,tcol=0xffb400,nf=.004,vc=0,lastLive=0,liveBusy=false,rec=null,wq=Promise.resolve();const LOG=[],btns=[],hTx=[];
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const STT_DEBOUNCE_MS=1100;let sttTimer=null,sttPending='';
+function clearSTTDebounce(){clearTimeout(sttTimer);sttTimer=null;sttPending=''}
+function debounceSTT(text=''){if(text)sttPending+=(sttPending?' ':'')+text;clearTimeout(sttTimer);if(!sttPending)return;sttTimer=setTimeout(()=>{const t=sttPending;clearSTTDebounce();if(mode==='listening'&&!busy&&!muted&&!junk(t))userText(t)},STT_DEBOUNCE_MS)}
+const junk=t=>t.length<2||/^[\s.,!?-]*(you|uh+|um+|hm+|mm+|ah+|oh+|thanks for watching|bye)?[\s.,!?-]*$/i.test(t)||/^[\[(*].*[\])*]$/.test(t);
+const c3=h=>parseInt(h.slice(1),16),GR=['#5a1f8a','#e8541c','#ffb400','#fff1a0'].map(c3),CYr=['#1a2f8a','#1fa3d6','#44e0e8','#e4fffb'].map(c3),GH=['#1a0e3c','#3a1450','#6a2a50'].map(c3),CHz=['#0c1a4a','#0f3a6a','#1a6a8a'].map(c3);
+const mixc=(a,b,t)=>[((a>>16&255)*(1-t)+(b>>16&255)*t)|0,((a>>8&255)*(1-t)+(b>>8&255)*t)|0,((a&255)*(1-t)+(b&255)*t)|0],abgr=c=>0xff000000|(c[2]<<16)|(c[1]<<8)|c[0];
+function themeStep(){theme+=((mode==='speaking'?1:0)-theme)*.07;for(let i=0;i<4;i++)P[4+i]=abgr(mixc(GR[i],CYr[i],theme));for(let i=0;i<3;i++)HZ[i]=abgr(mixc(GH[i],CHz[i],theme));const c=mixc(0xffb400,0x44e0e8,theme);tcol=(c[0]<<16)|(c[1]<<8)|c[2]}
+function logAdd(role,text){const t=new PIXI.Text((role==='user'?'YOU':'JARVIS')+'\n'+text,{fontFamily:'ui-monospace,Menlo,Consolas,monospace',fontSize:18,lineHeight:28,fill:role==='user'?0xfff1a0:0xe4fffb,wordWrap:true,wordWrapWidth:480,breakWords:true});t.resolution=2;t.alpha=0;t.logTime=performance.now();app.stage.addChild(t);LOG.push(t)}
+const mkT=()=>{const t=new PIXI.Text('',{fontFamily:'ui-monospace,Menlo,Consolas,monospace',fontSize:12,fill:0xffffff,letterSpacing:2});app.stage.addChild(t);return t},lt=k=>hTx[k]||(hTx[k]=mkT());
+// mute
+function setMute(v){muted=v;stream&&stream.getAudioTracks().forEach(t=>t.enabled=!v);if(v){stopRec();chunks=[];talking=false;vc=0;if(mode==='listening')lab.text='MIC MUTED (M)'}else if(mode==='listening'){lab.text='LISTENING...';startRec()}}
+addEventListener('keydown',e=>{if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName))return;if(e.key==='m'||e.key==='M')setMute(!muted)});
+// engine switch (settings or HUD)
+function applyEngine(){stopRec();if(mode==='listening'&&!muted&&!busy){if(cfg.sttMode==='browser')startRec();else loadW().catch(console.error)}}
+function setEngine(){cfg.sttMode=cfg.sttMode==='browser'?'whistle':'browser';try{localStorage.setItem('jarvis-cfg',JSON.stringify(cfg))}catch(e){}applyEngine()}
+$('sv').addEventListener('click',()=>setTimeout(applyEngine,0));
+// browser STT: interim text shown live
+function startRec(){if(cfg.sttMode!=='browser'||rec||muted||busy)return;const R=window.SpeechRecognition||window.webkitSpeechRecognition;if(!R){lab.text='BROWSER STT UNSUPPORTED';return}
+ rec=new R();rec.continuous=true;rec.interimResults=true;rec.lang=navigator.language||'en-US';
+ rec.onresult=e=>{if(busy||muted)return;let t='',final='';for(let i=e.resultIndex;i<e.results.length;i++){const r=e.results[i];t+=r[0].transcript;if(r.isFinal&&(r[0].confidence||1)>.35)final+=(final?' ':'')+r[0].transcript}
+  t=t.trim();if(!t)return;lab.text='> '+t.slice(-58);debounceSTT(final.trim())};
+ rec.onerror=e=>{if(e.error==='not-allowed')lab.text='MIC / SPEECH PERMISSION DENIED'};
+ rec.onend=()=>{rec=null;if(mode==='listening'&&!busy&&!muted&&cfg.sttMode==='browser')setTimeout(startRec,200)};
+ try{rec.start()}catch(e){rec=null}}
+function stopRec(){clearSTTDebounce();if(rec){rec.onend=null;try{rec.abort()}catch(e){}rec=null}}
+// whistle STT, serialized so live partials and the final pass never collide
+function stt(pcm){const r=wq.then(async()=>{await loadW();const a=pcm.length>480000?pcm.slice(-480000):pcm;return new Promise(res=>{wRes=res;ww.postMessage({type:'transcribe',pcm:a,seq:++wseq})})});wq=r.catch(()=>{});return r}
+// VAD with adaptive noise floor + minimum voiced length; live text every ~1.3 s
+function startVAD(src){proc=actx.createScriptProcessor(4096,1,1);const z=actx.createGain();z.gain.value=0;src.connect(proc);proc.connect(z);z.connect(actx.destination);
+ proc.onaudioprocess=e=>{if(!vadOn||busy||muted||cfg.sttMode==='browser')return;const d=e.inputBuffer.getChannelData(0);let s=0;for(let i=0;i<d.length;i++)s+=d[i]*d[i];const rms=Math.sqrt(s/d.length),thr=Math.max(.02,nf*3+.01);
+  if(rms>thr){if(!talking&&prev)chunks.push(prev);talking=true;quiet=0;vc++}else if(!talking)nf=nf*.97+rms*.03;else quiet+=d.length/actx.sampleRate;
+  if(talking){chunks.push(new Float32Array(d));const now=performance.now();
+   if(now-lastLive>1300&&!liveBusy&&chunks.length>4){lastLive=now;liveBusy=true;stt(cat(chunks)).then(t=>{if(talking&&t)lab.text='> '+t.trim().slice(-58)}).catch(()=>{}).finally(()=>{liveBusy=false})}
+   if(quiet>STT_DEBOUNCE_MS/1000){const a=cat(chunks),ok=vc>=3;chunks=[];talking=false;quiet=0;vc=0;if(ok)turn(a);else lab.text='LISTENING...'}}else prev=new Float32Array(d)}}
+async function turn(a){if(a.length<actx.sampleRate*.5)return;busy=true;aborted=false;mode='thinking';lab.text='TRANSCRIBING...';let t='';
+ try{t=(await stt(a)).trim()}catch(e){console.error(e);lab.text='ERROR: '+String(e.message||e).slice(0,50);await sleep(2500)}
+ if(t&&!junk(t))await userText(t);else{busy=false;if(mode!=='idle'){mode='listening';lab.text='LISTENING...'}}}
+async function userText(t){busy=true;aborted=false;stopRec();mode='thinking';lab.text='> '+t.slice(0,58);
+ try{await ask(t)}catch(e){console.error(e);lab.text='ERROR: '+String(e.message||e).slice(0,50);await sleep(2500)}
+ busy=false;pAn=null;if(mode!=='idle'){mode='listening';lab.text=muted?'MIC MUTED (M)':'LISTENING...';startRec()}}
+async function tap(){
+ if(mode==='idle'){if(await mic()){mode='listening';vadOn=true;muted=false;lab.text='LISTENING...';if(cfg.sttMode==='browser')startRec();else loadW().then(()=>{if(mode==='listening'&&!muted)lab.text='LISTENING...'}).catch(e=>{console.error(e);lab.text='STT FAILED: '+String(e.message).slice(0,40)})}}
+ else{vadOn=false;aborted=true;stopSpeech();stopRec();stopMic();mode='idle';busy=false;lab.text='TAP THE CORE TO SPEAK'}}
+// Floor transcript: text-local X/Y map to world X/Z, just above the floor.
+function drawLog(){const unit=6/480,gap=.35,visible=[],now=performance.now();let height=0;
+ for(let i=LOG.length-1;i>=0;i--){const t=LOG[i];t.visible=false;const h=t.height*unit;if(visible.length>=6||visible.length&&height+h>9)continue;visible.unshift({t,h,age:LOG.length-1-i});height+=h+gap}
+ let z=-4.5;for(const {t,h,age} of visible){const p=proj(4.8,.04,z),x=proj(4.8+unit,.04,z),y=proj(4.8,.04,z+unit);
+  t.transform.setFromMatrix(new PIXI.Matrix((x[0]-p[0])*S,(x[1]-p[1])*S,(y[0]-p[0])*S,(y[1]-p[1])*S,p[0]*S,p[1]*S));const target=age===0?.85:Math.max(.12,.85*Math.exp(-age*.3-(now-t.logTime)/60000));t.alpha+=(target-t.alpha)*.06;t.visible=true;z+=h+gap}}
+// HUD buttons
+function lbl(k,s,X,Y,R,fr,fn){const d=devicePixelRatio||1,t=lt(k);t.text=s;t.style.fontSize=Math.round(11*d);t.anchor.set(R==null?.5:R?0:1,.5);t.x=X+(R==null?0:(R?10:-10)*d);t.y=Y;t.alpha=fr;t.tint=tcol;t.visible=true;
+ if(fn){const w=t.width,h=t.height,x0=t.x-w*t.anchor.x-5,y0=Y-h/2-3;hgx.lineStyle(1,tcol,.7*fr).drawRect(x0,y0,w+10,h+6);if(fr>.5)btns.push({x0,y0,x1:x0+w+10,y1:y0+h+6,fn})}}
+
+function hud(){const d=devicePixelRatio||1,cd=proj(0,HY,0)[2];hgx.clear();btns.length=0;lab.tint=tcol;let k=0;
+ const L=[[.2,2.6,'STATUS '+mode.toUpperCase()],[2.2,-1.2,'ENERGY '+'#'.repeat(Math.round(E*10)).padEnd(10,'.')],[3.6,2.2,'MIC '+(muted?'MUTED':'LIVE')+' [M]',()=>setMute(!muted)],[5.1,-.4,'STT '+(cfg.sttMode==='browser'?'BROWSER':'WHISTLE')+' [SWITCH]',setEngine],[1.2,-2.2,'LLM '+cfg.model]];
+ L.forEach(([a0,y,s,fn])=>{const a=a0+tm*.06,p=proj(Math.cos(a)*5.4,HY+y,Math.sin(a)*5.4),q=proj(Math.cos(a)*3.1,HY+y*.5,Math.sin(a)*3.1),fr=p[2]>cd?1:.3,X=Math.round(p[0]*S),Y=Math.round(p[1]*S);
+  hgx.lineStyle(Math.max(1,S>>1),tcol,.55*fr).moveTo(Math.round(q[0]*S),Math.round(q[1]*S)).lineTo(X,Y);hgx.lineStyle(0).beginFill(tcol,fr).drawRect(X-S,Y-S,S*2,S*2).endFill();lbl(k++,s,X,Y,p[0]>q[0],fr,fn)});
+ for(let j=k;j<hTx.length;j++)hTx[j].visible=false;drawLog();}
+
+// ---------- frame ----------
+let last=performance.now();
+app.ticker.add(()=>{const now=performance.now(),dt=Math.min(.05,(now-last)/1e3);last=now;tm+=dt*.55;themeStep();
+ // energy
+ if(mode==='listening'&&an){an.getByteFrequencyData(fd);let s=0;for(let i=0;i<fd.length;i++)s+=fd[i];tE=Math.min(1,s/fd.length/110);for(let i=0;i<96;i++)bars[i]+=((fd[2+(i%48)*2]||0)/255-bars[i])*.4}
+ else if(mode==='speaking'&&pAn){pAn.getByteFrequencyData(pFd);let s=0;for(let i=0;i<pFd.length;i++)s+=pFd[i];tE=Math.min(1,s/pFd.length/90);for(let i=0;i<96;i++)bars[i]+=((pFd[2+(i%48)*2]||0)/255-bars[i])*.4}
+ else if(mode==='thinking'){tE=.2+.15*Math.sin(tm*8);for(let i=0;i<96;i++)bars[i]+=(.25*(.5+.5*Math.sin(i*.4-tm*6))-bars[i])*.2}
+ else if(mode==='speaking'){spkT+=dt;const e=Math.max(0,Math.sin(spkT*13)*Math.sin(spkT*4.3+1))*.9;tE=.15+e*.8;for(let i=0;i<96;i++)bars[i]+=(tE*(.5+.5*Math.sin(i*.7+tm*9))-bars[i])*.35;
+  }
+ else{tE=.06+.04*Math.sin(tm*1.6);for(let i=0;i<96;i++)bars[i]*=.9}
+ E+=(tE-E)*.25;if(E>.35&&Math.random()<.18)pulses.push(0);pulses=pulses.map(r=>r+dt*4).filter(r=>r<SR);
+ // points
+ let n=0;const sp=tm*.25,cs=Math.cos(sp),sn=Math.sin(sp);
+ for(let i=0;i<NR;i++){const r=rA[i];for(let j=0;j<NP;j++){const th=r.ph+tm*r.sp+j/NP*r.span,rr=r.R*(1+E*.45*Math.sin(j*.3+tm*4+i)),c=Math.cos(th)*rr,s=Math.sin(th)*rr;
+  const x=c*r.u[0]+s*r.v[0],y=c*r.u[1]+s*r.v[1],z=c*r.u[2]+s*r.v[2];pos[n*3]=x*cs+z*sn;pos[n*3+1]=y+HY;pos[n*3+2]=-x*sn+z*cs;pm[n++]=r.mat}}
+ for(let j=0;j<160;j++){const a=j*2.4+tm*2,b=Math.acos(1-2*(j+.5)/160),rr=(.55+E*.5)*(1+.2*Math.sin(tm*5+j));pos[n*3]=rr*Math.sin(b)*Math.cos(a);pos[n*3+1]=HY+rr*Math.cos(b);pos[n*3+2]=rr*Math.sin(b)*Math.sin(a);pm[n++]=1}
+ // clear
+ px.fill(255);dep.fill(-1e9);sh.fill(0);
+ const s=scl(),cx=CX(),cy=CY(),cY=Math.cos(cam.yaw),sY=Math.sin(cam.yaw),st=Math.max(2,Math.round(s*.11));
+ // cast shadows (hard, long, screen-right)
+ for(let i=0;i<NT;i++){const x=pos[i*3],y=pos[i*3+1],z=pos[i*3+2],x1=x*cY+z*sY,z1=-x*sY+z*cY,X=(cx+s*(x1+y*2.2))|0,Y=(cy+s*z1*sp_)|0;
+  for(let b=0;b<st;b++){const yy=Y+b;if(yy<0||yy>=H)continue;for(let a=0;a<st;a++){const xx=X+a;if(xx>=0&&xx<W)sh[yy*W+xx]=1}}}
+ // floor
+ const R0=SR-1.8;
+ for(let y=0;y<H;y++){const z1=-((cy-y)/s)/sp_;for(let x=0;x<W;x++){const x1=(x-cx)/s,wx=x1*cY-z1*sY,wz=x1*sY+z1*cY,r=Math.hypot(wx,wz),k=y*W+x,b=Bay[(y&3)*4+(x&3)];
+  if(r>SR)continue;const t=(r-R0)/1.8+(Math.sin(wx*7.1)*Math.cos(wz*6.3))*.18;if(t>0&&b<t)continue;
+  let tone=1.1+(((Math.floor(wx*1.2)+Math.floor(wz*1.2))&1)?.35:0)+((r%1.6)<.07?.9:0)+Math.max(0,1.5-r*.28)*(1+E*1.3)*.9;
+  if(sh[k])tone-=1.15;const l=Math.max(0,Math.min(3,(tone+b-.5)|0));px[k]=l;dep[k]=z1*cp_}}
+ // signal bars + pulses
+ for(let i=0;i<96;i++){const a=i/96*6.283+sp*.5,h=.12+bars[i]*3.2,x=Math.cos(a)*3.9,z=Math.sin(a)*3.9;for(let y=0;y<h;y+=.09)plot(x,y+.03,z,2,2,Math.min(3,1+(y/h*3|0)))}
+ for(const r of pulses)for(let a=0;a<6.283;a+=.07)plot(Math.cos(a)*r,.04,Math.sin(a)*r,1,2,r<SR*.5?3:2);
+ // 3D hud: orbit ring ticks + satellites
+ for(let a=0;a<64;a++){const t=a/64*6.283-tm*.4,big=a%8==0;plot(Math.cos(t)*4.9,HY+Math.sin(t)*.9*Math.sin(.5),Math.sin(t)*4.9,big?3:2,2,big?3:1)}
+ for(let k=0;k<3;k++){const t=tm*.7+k*2.09,x=Math.cos(t)*5.4,z=Math.sin(t)*5.4,y=HY+1.4*Math.sin(tm+k*2);for(let d=0;d<8;d++)plot(x+(d&1)*.12,y+((d>>1)&1)*.12,z+((d>>2)&1)*.12,2,2,3)}
+ holoRaster();
+ // depth-buffer edges: darker behind, warm rim on upper-left
+ for(let y=1;y<H;y++)for(let x=1;x<W;x++){const k=y*W+x,v=px[k];if(v<4||v===255)continue;const d=dep[k],dl=dep[k-1],du=dep[k-W],e=.2;let l=v&3;
+  if(dl>d+e||du>d+e)l=Math.max(0,l-1);else if(dl<d-e||du<d-e)l=3;px[k]=(v&~3)|l}
+ // out
+ {const GW=(W>>2)+2,GH=(H>>2)+2;if(!gl||gl.length!==GW*GH){gl=new Float32Array(GW*GH);gb=new Float32Array(GW*GH)}gl.fill(0);
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){const v=px[y*W+x];if(v>=4&&v<8)gl[(y>>2)*GW+(x>>2)]+=.25+(v&3)*.15}
+  for(let p=0;p<2;p++){const a=p?gb:gl,b=p?gl:gb;for(let y=1;y<GH-1;y++)for(let x=1;x<GW-1;x++){const k=y*GW+x;b[k]=(a[k]*2+a[k-1]+a[k+1]+a[k-GW]+a[k+GW])/6}}
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){const i=y*W+x,v=px[i];if(v!==255){u32[i]=P[v];continue}const l=Math.min(3,(gl[(y>>2)*GW+(x>>2)]*1.1+Bay[(y&3)*4+(x&3)]-.5)|0);u32[i]=l>0?HZ[l-1]:BG}}
+ g2.putImageData(img,0,0);tex.baseTexture.update();
+ // pixi hud: pulse ring around core
+ hud();const c=proj(0,HY,0);ring.clear();const R=(3.1+E*.9)*s*S,ox=Math.round(c[0]*S),oy=Math.round(c[1]*S);
+ ring.lineStyle(Math.max(2,S),tcol,.55+E*.4);ring.drawEllipse(ox,oy,R,R*.96);
+ ring.lineStyle(Math.max(1,S>>1),tcol,.22);ring.drawEllipse(ox,oy,R*1.08+Math.sin(tm*2)*S*2,R*1.04)});
+</script></body></html>
