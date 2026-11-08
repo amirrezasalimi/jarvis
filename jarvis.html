@@ -51,7 +51,7 @@ button.p{background:var(--acc);color:#fff}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.4.2/pixi.min.js"></script>
 <script>
 // ---------- config ----------
-const DEF={endpoint:'https://api.openai.com/v1',key:'',model:'gpt-4o-mini',sys:'You are JARVIS, a concise, witty AI assistant.',tts:'phonon-tts',voice:'',stt:'whistle-webgpu',sttMode:'whistle',dev:'webgpu'};
+const DEF={endpoint:'https://api.openai.com/v1',key:'',model:'gpt-4o-mini',sys:'You are JARVIS, a concise, witty AI assistant.',tts:'phonon-tts',voice:'',stt:'whistle-webgpu',sttMode:'browser',dev:'webgpu'};
 let cfg={...DEF};try{cfg={...DEF,...JSON.parse(localStorage.getItem('jarvis-cfg')||'{}')}}catch(e){}
 const $=id=>document.getElementById(id),F=['endpoint','key','model','sys','tts','voice','stt','sttMode','dev'];
 const openM=()=>{F.forEach(k=>{if(k==='voice')setVoiceOptions(cfg.voice);else $(k).value=cfg[k]});$('m').classList.add('on');refreshVoices()};
@@ -74,7 +74,7 @@ const HY=3.7,SR=6.4,sp_=Math.sin(Math.PI/6),cp_=Math.cos(Math.PI/6);
 
 // ---------- state ----------
 let W,H,S,C=document.createElement('canvas'),g2=C.getContext('2d'),img,u32,px,dep,sh,tex,spr;
-const cam={yaw:.6,zoom:1,px:0,py:0};let mode='idle',E=0,tE=0,tm=0,spkT=0,bars=new Float32Array(96),pulses=[];
+const cam={yaw:.6,zoom:1,px:0,py:0};let mode='idle',E=0,tE=0,micE=0,tm=0,spkT=0,bars=new Float32Array(96),pulses=[];
 let actx,an,fd,stream;
 const app=new PIXI.Application({background:0x0a0720,antialias:false,resolution:1,autoDensity:false});
 app.view.id='v';document.body.prepend(app.view);const hc={width:0,height:0};
@@ -318,22 +318,24 @@ function lbl(k,s,X,Y,R,fr,fn){const d=devicePixelRatio||1,t=lt(k);t.text=s;t.sty
  if(fn){const w=t.width,h=t.height,x0=t.x-w*t.anchor.x-5,y0=Y-h/2-3;hgx.lineStyle(1,tcol,.7*fr).drawRect(x0,y0,w+10,h+6);if(fr>.5)btns.push({x0,y0,x1:x0+w+10,y1:y0+h+6,fn})}}
 
 function hud(){const d=devicePixelRatio||1,cd=proj(0,HY,0)[2];hgx.clear();btns.length=0;lab.tint=tcol;let k=0;
- const L=[[.2,2.6,'STATUS '+mode.toUpperCase()],[2.2,-1.2,'ENERGY '+'#'.repeat(Math.round(E*10)).padEnd(10,'.')],[3.6,2.2,'MIC '+(muted?'MUTED':'LIVE')+' [M]',()=>setMute(!muted)],[5.1,-.4,'STT '+(cfg.sttMode==='browser'?'BROWSER':'WHISTLE')+' [SWITCH]',setEngine],[1.2,-2.2,'LLM '+cfg.model]];
+ const L=[[.2,2.6,'STATUS '+mode.toUpperCase()],[2.2,-1.2,'MIC LEVEL '+'#'.repeat(Math.round(micE*10)).padEnd(10,'.')],[3.6,2.2,'MIC '+(muted?'MUTED':'LIVE')+' [M]',()=>setMute(!muted)],[5.1,-.4,'STT '+(cfg.sttMode==='browser'?'BROWSER':'WHISTLE')+' [SWITCH]',setEngine],[1.2,-2.2,'LLM '+cfg.model]];
  L.forEach(([a0,y,s,fn])=>{const a=a0+tm*.06,p=proj(Math.cos(a)*5.4,HY+y,Math.sin(a)*5.4),q=proj(Math.cos(a)*3.1,HY+y*.5,Math.sin(a)*3.1),fr=p[2]>cd?1:.3,X=Math.round(p[0]*S),Y=Math.round(p[1]*S);
   hgx.lineStyle(Math.max(1,S>>1),tcol,.55*fr).moveTo(Math.round(q[0]*S),Math.round(q[1]*S)).lineTo(X,Y);hgx.lineStyle(0).beginFill(tcol,fr).drawRect(X-S,Y-S,S*2,S*2).endFill();lbl(k++,s,X,Y,p[0]>q[0],fr,fn)});
  for(let j=k;j<hTx.length;j++)hTx[j].visible=false;drawLog();}
 
+// Separate signals: microphone drives the floor; only AI activity drives the sphere.
+function updateEnergy(dt){let level=0;
+ if(mode==='listening'&&!muted&&an){an.getByteFrequencyData(fd);let sum=0;for(let i=0;i<fd.length;i++)sum+=fd[i];level=Math.min(1,sum/fd.length/110);for(let i=0;i<96;i++)bars[i]+=((fd[2+(i%48)*2]||0)/255-bars[i])*.4}else for(let i=0;i<96;i++)bars[i]*=.9;
+ micE+=(level-micE)*.25;
+ if(mode==='speaking'&&pAn){pAn.getByteFrequencyData(pFd);let sum=0;for(let i=0;i<pFd.length;i++)sum+=pFd[i];tE=Math.min(1,sum/pFd.length/90)}
+ else if(mode==='thinking')tE=.2+.15*Math.sin(tm*8);
+ else if(mode==='speaking'){spkT+=dt;tE=.15+Math.max(0,Math.sin(spkT*13)*Math.sin(spkT*4.3+1))*.72}
+ else tE=.06;
+ E+=(tE-E)*.25;if(micE>.35&&Math.random()<.18)pulses.push(0);pulses=pulses.map(r=>r+dt*4).filter(r=>r<SR)}
 // ---------- frame ----------
 let last=performance.now();
 app.ticker.add(()=>{const now=performance.now(),dt=Math.min(.05,(now-last)/1e3);last=now;tm+=dt*.55;themeStep();
- // energy
- if(mode==='listening'&&an){an.getByteFrequencyData(fd);let s=0;for(let i=0;i<fd.length;i++)s+=fd[i];tE=Math.min(1,s/fd.length/110);for(let i=0;i<96;i++)bars[i]+=((fd[2+(i%48)*2]||0)/255-bars[i])*.4}
- else if(mode==='speaking'&&pAn){pAn.getByteFrequencyData(pFd);let s=0;for(let i=0;i<pFd.length;i++)s+=pFd[i];tE=Math.min(1,s/pFd.length/90);for(let i=0;i<96;i++)bars[i]+=((pFd[2+(i%48)*2]||0)/255-bars[i])*.4}
- else if(mode==='thinking'){tE=.2+.15*Math.sin(tm*8);for(let i=0;i<96;i++)bars[i]+=(.25*(.5+.5*Math.sin(i*.4-tm*6))-bars[i])*.2}
- else if(mode==='speaking'){spkT+=dt;const e=Math.max(0,Math.sin(spkT*13)*Math.sin(spkT*4.3+1))*.9;tE=.15+e*.8;for(let i=0;i<96;i++)bars[i]+=(tE*(.5+.5*Math.sin(i*.7+tm*9))-bars[i])*.35;
-  }
- else{tE=.06+.04*Math.sin(tm*1.6);for(let i=0;i<96;i++)bars[i]*=.9}
- E+=(tE-E)*.25;if(E>.35&&Math.random()<.18)pulses.push(0);pulses=pulses.map(r=>r+dt*4).filter(r=>r<SR);
+ updateEnergy(dt);
  // points
  let n=0;const sp=tm*.25,cs=Math.cos(sp),sn=Math.sin(sp);
  for(let i=0;i<NR;i++){const r=rA[i];for(let j=0;j<NP;j++){const th=r.ph+tm*r.sp+j/NP*r.span,rr=r.R*(1+E*.45*Math.sin(j*.3+tm*4+i)),c=Math.cos(th)*rr,s=Math.sin(th)*rr;
@@ -349,7 +351,7 @@ app.ticker.add(()=>{const now=performance.now(),dt=Math.min(.05,(now-last)/1e3);
  const R0=SR-1.8;
  for(let y=0;y<H;y++){const z1=-((cy-y)/s)/sp_;for(let x=0;x<W;x++){const x1=(x-cx)/s,wx=x1*cY-z1*sY,wz=x1*sY+z1*cY,r=Math.hypot(wx,wz),k=y*W+x,b=Bay[(y&3)*4+(x&3)];
   if(r>SR)continue;const t=(r-R0)/1.8+(Math.sin(wx*7.1)*Math.cos(wz*6.3))*.18;if(t>0&&b<t)continue;
-  let tone=1.1+(((Math.floor(wx*1.2)+Math.floor(wz*1.2))&1)?.35:0)+((r%1.6)<.07?.9:0)+Math.max(0,1.5-r*.28)*(1+E*1.3)*.9;
+  let tone=1.1+(((Math.floor(wx*1.2)+Math.floor(wz*1.2))&1)?.35:0)+((r%1.6)<.07?.9:0)+Math.max(0,1.5-r*.28)*(1+micE*1.3)*.9;
   if(sh[k])tone-=1.15;const l=Math.max(0,Math.min(3,(tone+b-.5)|0));px[k]=l;dep[k]=z1*cp_}}
  // signal bars + pulses
  for(let i=0;i<96;i++){const a=i/96*6.283+sp*.5,h=.12+bars[i]*3.2,x=Math.cos(a)*3.9,z=Math.sin(a)*3.9;for(let y=0;y<h;y+=.09)plot(x,y+.03,z,2,2,Math.min(3,1+(y/h*3|0)))}
